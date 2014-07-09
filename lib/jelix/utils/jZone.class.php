@@ -30,6 +30,13 @@ class jZone {
     protected $_useCache = false;
 
     /**
+     * default cache timeout (seconds).
+     * used when the cache timeout is "unlimited" to create an artificial permanent cache.
+     * @var integer
+     */
+    protected $_defaultTimeout = 315360000; // 3650*24*3600 --> 3650 days
+
+    /**
      * cache timeout (seconds).
      * set to 0 if you want to delete cache manually.
      * @var integer
@@ -152,23 +159,24 @@ class jZone {
             $cacheFiles = $this->_getCacheFiles();
             $f = $cacheFiles['content'];
             if(file_exists($f)){
-                if($this->_cacheTimeout > 0){
-                    clearstatcache(false, $f);
-                    if(time() - filemtime($f) > $this->_cacheTimeout){
-                        // timeout : regenerate the cache
-                        unlink($f);
-                        $this->_cancelCache=false;
-                        $response = jApp::coord()->response;
-                        $sniffer = new jMethodSniffer( $response, '$resp', array('getType', 'getFormatType'), true );
-                        jApp::coord()->response = $sniffer;
-                        $content=$this->_createContent();
-                        jApp::coord()->response = $response;
-                        if(!$this->_cancelCache){
-                            jFile::write($f,$content);
-                            jFile::write($cacheFiles['meta'], (string)$sniffer);
-                        }
-                        return $content;
+                clearstatcache(false, $f);
+                if(time() > filemtime($f)){
+                    // timeout : regenerate the cache
+                    unlink($f);
+                    $this->_cancelCache=false;
+                    $response = jApp::coord()->response;
+                    $sniffer = new jMethodSniffer( $response, '$resp', array('getType', 'getFormatType'), true );
+                    jApp::coord()->response = $sniffer;
+                    $content=$this->_createContent();
+                    jApp::coord()->response = $response;
+                    if(!$this->_cancelCache){
+                        $ttl = $this->_getCacheTtl();
+                        jFile::write($f,$content);
+                        touch($f, $ttl);
+                        jFile::write($cacheFiles['meta'], (string)$sniffer);
+                        touch($cacheFiles['meta'], $ttl);
                     }
+                    return $content;
                 }
                 //fetch metas from cache :
                 if( file_exists($cacheFiles['meta']) ) {
@@ -187,7 +195,9 @@ class jZone {
                     $this->_createContent();
                     jApp::coord()->response = $response;
                     if(!$this->_cancelCache){
+                        $ttl = $this->_getCacheTtl();
                         jFile::write($cacheFiles['meta'], (string)$sniffer);
+                        touch($cacheFiles['meta'], $ttl);
                     }
                 }
                 //and now fetch content from cache :
@@ -200,8 +210,11 @@ class jZone {
                 $content=$this->_createContent();
                 jApp::coord()->response = $response;
                 if(!$this->_cancelCache){
+                    $ttl = $this->_getCacheTtl();
                     jFile::write($f,$content);
+                    touch($f, $ttl);
                     jFile::write($cacheFiles['meta'], (string)$sniffer);
+                    touch($cacheFiles['meta'], $ttl);
                 }
             }
         }else{
@@ -271,6 +284,36 @@ class jZone {
             }
         }
         return $cacheFiles;
+    }
+
+    /**
+     * get the cache's default timeout as UNIX timestamp.
+     * @return int the cache's default ttl in seconds
+     */
+    protected function _getCacheDefaultTtl(){
+        return time() + $this->_defaultTimeout;
+    }
+
+    /**
+     * get the cache timeout as UNIX timestamp.
+     * must be executed after _createContent function to get the real calculated ttl.
+     * @return int the cache's ttl in seconds
+     */
+    private function _getCacheTtl(){
+        //calculate the file's cache ttl
+        $ttl = $this->_cacheTimeout;
+        switch($ttl) {
+            case 0:
+                $ttl = $this->_getCacheDefaultTtl();
+                break;
+            default:
+                if ($ttl <= 2592000) {
+                    $ttl += time();
+                }
+                break;
+        }
+
+        return $ttl;
     }
 
    /**
